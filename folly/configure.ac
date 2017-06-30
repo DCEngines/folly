@@ -46,9 +46,10 @@ AC_PROG_CC
 
 AC_CXX_COMPILE_STDCXX_1Y
 
-# next two lines enable address sanitizer for Folly (SANDEEP)
-# yet to figure out a way to enable it conditionally in parent build
-# AC_SUBST([EXTRA_CFLAGS],["-fsanitize=address"])
+# compile the address sanitizer-related functions inside Folly 
+# the flag seen below is found in CPortability.h
+# -- SANDEEP
+AC_SUBST([EXTRA_CFLAGS],["-DFOLLY_SANITIZE_ADDRESS=1"])
 
 # Be sure to add any -std option to CXXFLAGS before we invoke any
 # AC_COMPILE_IFELSE() or similar macros. Any such macros that are invoked
@@ -63,8 +64,7 @@ if test "x$ac_cv_cxx_compile_cxx1y_gxx" = xyes; then
 fi
 
 # added EXTRA_CFLAGS to CXXFLAGS (SANDEEP)
-#CXXFLAGS="$STD $CXXFLAGS $EXTRA_CFLAGS"
-CXXFLAGS="$STD $CXXFLAGS"
+CXXFLAGS="$STD $CXXFLAGS $EXTRA_CFLAGS"
 
 # expose required -std option via pkg-config
 PKG_CXXFLAGS=$STD
