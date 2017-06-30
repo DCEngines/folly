@@ -49,7 +49,7 @@ AC_CXX_COMPILE_STDCXX_1Y
 # compile the address sanitizer-related functions inside Folly 
 # the flag seen below is found in CPortability.h
 # -- SANDEEP
-AC_SUBST([EXTRA_CFLAGS],["-DFOLLY_SANITIZE_ADDRESS=1"])
+#AC_SUBST([EXTRA_CFLAGS],["-DFOLLY_SANITIZE_ADDRESS=1"])
 
 # Be sure to add any -std option to CXXFLAGS before we invoke any
 # AC_COMPILE_IFELSE() or similar macros. Any such macros that are invoked
