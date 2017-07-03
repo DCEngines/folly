@@ -33,6 +33,11 @@ AM_PROG_LIBTOOL
 
 AC_LANG([C++])
 
+# compile the address sanitizer-related functions inside Folly 
+# the flag seen below is found in CPortability.h
+AC_SUBST([EXTRA_CFLAGS],["-DFOLLY_SANITIZE_ADDRESS=1"])
+
+
 # Checks for programs.
 AC_PROG_CXX
 AC_PROG_CC
