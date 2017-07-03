@@ -20,7 +20,7 @@
 #include <folly/Function.h>
 #include <folly/IndexedMemPool.h>
 #include <folly/Portability.h>
-#include <folly/detail/CacheLocality.h>
+#include <folly/concurrency/CacheLocality.h>
 
 #include <atomic>
 #include <cassert>
@@ -35,7 +35,7 @@ namespace folly {
 ///
 /// FC is an alternative to coarse-grained locking for making
 /// sequential data structures thread-safe while minimizing the
-/// synchroniation overheads and cache coherence traffic associated
+/// synchronization overheads and cache coherence traffic associated
 /// with locking.
 ///
 /// Under FC, when a thread finds the lock contended, it can
@@ -50,7 +50,7 @@ namespace folly {
 ///   and acquiring the lock are eliminated from the critical path of
 ///   operating on the data structure.
 /// - Opportunities for smart combining, where executing multiple
-///   operations together may take less time than executng the
+///   operations together may take less time than executing the
 ///   operations separately, e.g., K delete_min operations on a
 ///   priority queue may be combined to take O(K + log N) time instead
 ///   of O(K * log N).
@@ -59,13 +59,13 @@ namespace folly {
 
 /// - A simple interface that requires minimal extra code by the
 ///   user. To use this interface efficiently the user-provided
-///   functions must be copyable to folly::Functio without dynamic
+///   functions must be copyable to folly::Function without dynamic
 ///   allocation. If this is impossible or inconvenient, the user is
 ///   encouraged to use the custom interface described below.
-/// - A custom interface that supports custom combinining and custom
+/// - A custom interface that supports custom combining and custom
 ///   request structure, either for the sake of smart combining or for
 ///   efficiently supporting operations that are not be copyable to
-///   folly::Function without synamic allocation.
+///   folly::Function without dynamic allocation.
 /// - Both synchronous and asynchronous operations.
 /// - Request records with and without thread-caching.
 /// - Combining with and without a dedicated combiner thread.
@@ -84,7 +84,7 @@ namespace folly {
 ///   class ConcurrentFoo : public FlatCombining<ConcurrentFoo> {
 ///     Foo foo_; // sequential data structure
 ///    public:
-///     T bar(V v) { // thread-safe execution of foo_.bar(v)
+///     T bar(V& v) { // thread-safe execution of foo_.bar(v)
 ///       T result;
 ///       // Note: fn must be copyable to folly::Function without dynamic
 ///       // allocation. Otherwise, it is recommended to use the custom
@@ -225,7 +225,8 @@ class FlatCombining {
     }
   };
 
-  using Pool = folly::IndexedMemPool<Rec, 32, 4, Atom, false, false>;
+  using Pool = folly::
+      IndexedMemPool<Rec, 32, 4, Atom, IndexedMemPoolTraitsLazyRecycle<Rec>>;
 
  public:
   /// The constructor takes three optional arguments:
@@ -236,7 +237,7 @@ class FlatCombining {
   ///   on the request records (if 0, then kDefaultMaxops)
   explicit FlatCombining(
       const bool dedicated = true,
-      uint32_t numRecs = 0, // number of combining records
+      const uint32_t numRecs = 0, // number of combining records
       const uint32_t maxOps = 0 // hint of max ops per combining session
       )
       : numRecs_(numRecs == 0 ? kDefaultNumRecs : numRecs),
@@ -277,13 +278,6 @@ class FlatCombining {
     m_.lock();
   }
 
-  // Give the caller exclusive access through a lock holder.
-  // No need for explicit release.
-  template <typename LockHolder>
-  void acquireExclusive(LockHolder& l) {
-    l = LockHolder(m_);
-  }
-
   // Try to give the caller exclusive access. Returns true iff successful.
   bool tryExclusive() {
     return m_.try_lock();
@@ -292,6 +286,21 @@ class FlatCombining {
   // Release exclusive access. The caller must have exclusive access.
   void releaseExclusive() {
     m_.unlock();
+  }
+
+  // Give the lock holder ownership of the mutex and exclusive access.
+  // No need for explicit release.
+  template <typename LockHolder>
+  void holdLock(LockHolder& l) {
+    l = LockHolder(m_);
+  }
+
+  // Give the caller's lock holder ownership of the mutex but without
+  // exclusive access. The caller can later use the lock holder to try
+  // to acquire exclusive access.
+  template <typename LockHolder>
+  void holdLock(LockHolder& l, std::defer_lock_t) {
+    l = LockHolder(m_, std::defer_lock);
   }
 
   // Execute an operation without combining
@@ -369,7 +378,6 @@ class FlatCombining {
   Rec* allocRec() {
     auto idx = recsPool_.allocIndex();
     if (idx == NULL_INDEX) {
-      outOfSpaceCount_.fetch_add(1);
       return nullptr;
     }
     Rec& rec = recsPool_[idx];
@@ -386,20 +394,24 @@ class FlatCombining {
     recsPool_.recycleIndex(idx);
   }
 
-  // Returns a count of the number of combined operations so far.
-  uint64_t getCombinedOpCount() {
-    std::lock_guard<Mutex> guard(m_);
+  // Returns the number of uncombined operations so far.
+  uint64_t getNumUncombined() const {
+    return uncombined_;
+  }
+
+  // Returns the number of combined operations so far.
+  uint64_t getNumCombined() const {
     return combined_;
   }
 
-  // Returns a count of the number of combining passes so far.
-  uint64_t getCombiningPasses() {
-    std::lock_guard<Mutex> guard(m_);
+  // Returns the number of combining passes so far.
+  uint64_t getNumPasses() const {
     return passes_;
   }
 
-  uint64_t getOutOfSpaceCount() {
-    return outOfSpaceCount_.load();
+  // Returns the number of combining sessions so far.
+  uint64_t getNumSessions() const {
+    return sessions_;
   }
 
  protected:
@@ -424,10 +436,10 @@ class FlatCombining {
   Pool recsPool_;
 
   FOLLY_ALIGN_TO_AVOID_FALSE_SHARING
+  uint64_t uncombined_ = 0;
   uint64_t combined_ = 0;
   uint64_t passes_ = 0;
   uint64_t sessions_ = 0;
-  Atom<uint64_t> outOfSpaceCount_{0};
 
   template <typename OpFunc, typename FillFunc, typename ResFn>
   void requestOp(
@@ -440,6 +452,7 @@ class FlatCombining {
     std::unique_lock<Mutex> l(this->m_, std::defer_lock);
     if (l.try_lock()) {
       // No contention
+      ++uncombined_;
       tryCombining();
       opFn();
       return;
@@ -456,6 +469,8 @@ class FlatCombining {
     if (rec == nullptr) {
       // Can't use FC - Must acquire lock
       l.lock();
+      ++uncombined_;
+      tryCombining();
       opFn();
       return;
     }
@@ -550,6 +565,7 @@ class FlatCombining {
     if (!dedicated_) {
       while (isPending()) {
         clearPending();
+        ++sessions_;
         combined_ += combiningSession();
       }
     }

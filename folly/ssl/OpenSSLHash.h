@@ -16,14 +16,10 @@
 
 #pragma once
 
-#include <folly/io/async/ssl/OpenSSLPtrTypes.h>
-#include <folly/portability/OpenSSL.h>
-#include <openssl/evp.h>
-#include <openssl/hmac.h>
-#include <openssl/sha.h>
-
 #include <folly/Range.h>
 #include <folly/io/IOBuf.h>
+#include <folly/ssl/OpenSSLPtrTypes.h>
+#include <folly/portability/OpenSSL.h>
 
 namespace folly {
 namespace ssl {
@@ -36,6 +32,20 @@ class OpenSSLHash {
   class Digest {
    public:
     Digest() : ctx_(EVP_MD_CTX_new()) {}
+
+    Digest(const Digest& other) {
+      ctx_ = EvpMdCtxUniquePtr(EVP_MD_CTX_new());
+      if (other.md_ != nullptr) {
+        hash_init(other.md_);
+        check_libssl_result(
+            1, EVP_MD_CTX_copy_ex(ctx_.get(), other.ctx_.get()));
+      }
+    }
+
+    Digest& operator=(const Digest& other) {
+      this->~Digest();
+      return *new (this) Digest(other);
+    }
 
     void hash_init(const EVP_MD* md) {
       md_ = md;
@@ -58,6 +68,7 @@ class OpenSSLHash {
       check_libssl_result(size, int(len));
       md_ = nullptr;
     }
+
    private:
     const EVP_MD* md_ = nullptr;
     EvpMdCtxUniquePtr ctx_{nullptr};

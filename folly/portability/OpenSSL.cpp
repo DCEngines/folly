@@ -14,20 +14,91 @@
  * limitations under the License.
  */
 #include <folly/portability/OpenSSL.h>
+
 #include <stdexcept>
 
 namespace folly {
+namespace portability {
 namespace ssl {
 
-#if FOLLY_OPENSSL_IS_110
-////////////////////////////////////////////////////////////////////////////////
-// APIs needed in 1.1.0 only
-////////////////////////////////////////////////////////////////////////////////
+#if OPENSSL_IS_BORINGSSL
+int SSL_CTX_set1_sigalgs_list(SSL_CTX*, const char*) {
+  return 1; // 0 implies error
+}
 
-#else
-////////////////////////////////////////////////////////////////////////////////
-// APIs needed in BoringSSL and OpenSSL < 1.1.0 (i.e., 1.0.2, 1.0.1, 1.0.0, etc)
-////////////////////////////////////////////////////////////////////////////////
+int TLS1_get_client_version(SSL* s) {
+  // Note that this isn't the client version, and the API to
+  // get this has been hidden. It may be found by parsing the
+  // ClientHello (there is a callback via the SSL_HANDSHAKE struct)
+  return s->version;
+}
+#endif
+
+#if FOLLY_OPENSSL_IS_100
+uint32_t SSL_CIPHER_get_id(const SSL_CIPHER* c) {
+  return c->id;
+}
+
+int TLS1_get_client_version(const SSL* s) {
+  return (s->client_version >> 8) == TLS1_VERSION_MAJOR ? s->client_version : 0;
+}
+#endif
+
+#if FOLLY_OPENSSL_IS_100 || FOLLY_OPENSSL_IS_101
+int X509_get_signature_nid(X509* cert) {
+  return OBJ_obj2nid(cert->sig_alg->algorithm);
+}
+#endif
+
+#if FOLLY_OPENSSL_IS_100 || FOLLY_OPENSSL_IS_101 || FOLLY_OPENSSL_IS_102
+int SSL_CTX_up_ref(SSL_CTX* ctx) {
+  return CRYPTO_add(&ctx->references, 1, CRYPTO_LOCK_SSL_CTX);
+}
+
+int SSL_SESSION_up_ref(SSL_SESSION* session) {
+  return CRYPTO_add(&session->references, 1, CRYPTO_LOCK_SSL_SESSION);
+}
+
+int X509_up_ref(X509* x) {
+  return CRYPTO_add(&x->references, 1, CRYPTO_LOCK_X509);
+}
+
+int EVP_PKEY_up_ref(EVP_PKEY* evp) {
+  return CRYPTO_add(&evp->references, 1, CRYPTO_LOCK_EVP_PKEY);
+}
+
+void RSA_get0_key(
+    const RSA* r,
+    const BIGNUM** n,
+    const BIGNUM** e,
+    const BIGNUM** d) {
+  if (n != nullptr) {
+    *n = r->n;
+  }
+  if (e != nullptr) {
+    *e = r->e;
+  }
+  if (d != nullptr) {
+    *d = r->d;
+  }
+}
+
+RSA* EVP_PKEY_get0_RSA(EVP_PKEY* pkey) {
+  if (pkey->type != EVP_PKEY_RSA) {
+    return nullptr;
+  }
+  return pkey->pkey.rsa;
+}
+
+EC_KEY* EVP_PKEY_get0_EC_KEY(EVP_PKEY* pkey) {
+  if (pkey->type != EVP_PKEY_EC) {
+    return nullptr;
+  }
+  return pkey->pkey.ec;
+}
+#endif
+
+#if !FOLLY_OPENSSL_IS_110
 void BIO_meth_free(BIO_METHOD* biom) {
   OPENSSL_free((void*)biom);
 }
@@ -42,37 +113,12 @@ int BIO_meth_set_write(BIO_METHOD* biom, int (*write)(BIO*, const char*, int)) {
   return 1;
 }
 
-void EVP_MD_CTX_free(EVP_MD_CTX* ctx) {
-  EVP_MD_CTX_destroy(ctx);
-}
-
 const char* SSL_SESSION_get0_hostname(const SSL_SESSION* s) {
   return s->tlsext_hostname;
 }
 
-EVP_MD_CTX* EVP_MD_CTX_new(void) {
-  EVP_MD_CTX* ctx = (EVP_MD_CTX*)OPENSSL_malloc(sizeof(EVP_MD_CTX));
-  if (!ctx) {
-    throw std::runtime_error("Cannot allocate EVP_MD_CTX");
-  }
-  EVP_MD_CTX_init(ctx);
-  return ctx;
-}
-
-HMAC_CTX* HMAC_CTX_new(void) {
-  HMAC_CTX* ctx = (HMAC_CTX*)OPENSSL_malloc(sizeof(HMAC_CTX));
-  if (!ctx) {
-    throw std::runtime_error("Cannot allocate HMAC_CTX");
-  }
-  HMAC_CTX_init(ctx);
-  return ctx;
-}
-
-void HMAC_CTX_free(HMAC_CTX* ctx) {
-  if (ctx) {
-    HMAC_CTX_cleanup(ctx);
-    OPENSSL_free(ctx);
-  }
+unsigned char* ASN1_STRING_get0_data(const ASN1_STRING* x) {
+  return ASN1_STRING_data((ASN1_STRING*)x);
 }
 
 int SSL_SESSION_has_ticket(const SSL_SESSION* s) {
@@ -85,8 +131,8 @@ unsigned long SSL_SESSION_get_ticket_lifetime_hint(const SSL_SESSION* s) {
 
 // This is taken from OpenSSL 1.1.0
 int DH_set0_pqg(DH* dh, BIGNUM* p, BIGNUM* q, BIGNUM* g) {
-  /* If the fields p and g in d are NULL, the corresponding input
-   * parameters MUST be non-NULL.  q may remain NULL.
+  /* If the fields p and g in d are nullptr, the corresponding input
+   * parameters MUST not be nullptr.  q may remain nullptr.
    */
   if (dh == nullptr || (dh->p == nullptr && p == nullptr) ||
       (dh->g == nullptr && g == nullptr)) {
@@ -117,66 +163,76 @@ int DH_set0_pqg(DH* dh, BIGNUM* p, BIGNUM* q, BIGNUM* g) {
   return 1;
 }
 
-#ifdef OPENSSL_IS_BORINGSSL
-////////////////////////////////////////////////////////////////////////////////
-// APIs needed in BoringSSL only
-////////////////////////////////////////////////////////////////////////////////
-int SSL_CTX_set1_sigalgs_list(SSL_CTX*, const char*) {
-  return 1; // 0 implies error
+X509* X509_STORE_CTX_get0_cert(X509_STORE_CTX* ctx) {
+  return ctx->cert;
 }
 
-int TLS1_get_client_version(SSL* s) {
-  // Note that this isn't the client version, and the API to
-  // get this has been hidden. It may be found by parsing the
-  // ClientHello (there is a callback via the SSL_HANDSHAKE struct)
-  return s->version;
+STACK_OF(X509) * X509_STORE_CTX_get0_chain(X509_STORE_CTX* ctx) {
+  return X509_STORE_CTX_get_chain(ctx);
 }
 
-#elif FOLLY_OPENSSL_IS_102 || FOLLY_OPENSSL_IS_101 || FOLLY_OPENSSL_IS_100
-////////////////////////////////////////////////////////////////////////////////
-// APIs needed in 1.0.2 and 1.0.1/1.0.0 (both deprecated)
-////////////////////////////////////////////////////////////////////////////////
-int SSL_CTX_up_ref(SSL_CTX* ctx) {
-  return CRYPTO_add(&ctx->references, 1, CRYPTO_LOCK_SSL_CTX);
+STACK_OF(X509) * X509_STORE_CTX_get0_untrusted(X509_STORE_CTX* ctx) {
+  return ctx->untrusted;
 }
 
-int SSL_SESSION_up_ref(SSL_SESSION* session) {
-  return CRYPTO_add(&session->references, 1, CRYPTO_LOCK_SSL_SESSION);
+EVP_MD_CTX* EVP_MD_CTX_new() {
+  EVP_MD_CTX* ctx = (EVP_MD_CTX*)OPENSSL_malloc(sizeof(EVP_MD_CTX));
+  if (!ctx) {
+    throw std::runtime_error("Cannot allocate EVP_MD_CTX");
+  }
+  EVP_MD_CTX_init(ctx);
+  return ctx;
 }
 
-int X509_up_ref(X509* x) {
-  return CRYPTO_add(&x->references, 1, CRYPTO_LOCK_X509);
+void EVP_MD_CTX_free(EVP_MD_CTX* ctx) {
+  if (ctx) {
+    EVP_MD_CTX_cleanup(ctx);
+    OPENSSL_free(ctx);
+  }
 }
 
-#if FOLLY_OPENSSL_IS_101 || FOLLY_OPENSSL_IS_100
-////////////////////////////////////////////////////////////////////////////////
-// APIs needed in 1.0.1/1.0.0 (both deprecated)
-////////////////////////////////////////////////////////////////////////////////
-int X509_get_signature_nid(X509* cert) {
-  return OBJ_obj2nid(cert->sig_alg->algorithm);
+HMAC_CTX* HMAC_CTX_new() {
+  HMAC_CTX* ctx = (HMAC_CTX*)OPENSSL_malloc(sizeof(HMAC_CTX));
+  if (!ctx) {
+    throw std::runtime_error("Cannot allocate HMAC_CTX");
+  }
+  HMAC_CTX_init(ctx);
+  return ctx;
+}
+
+void HMAC_CTX_free(HMAC_CTX* ctx) {
+  if (ctx) {
+    HMAC_CTX_cleanup(ctx);
+    OPENSSL_free(ctx);
+  }
+}
+
+bool RSA_set0_key(RSA* r, BIGNUM* n, BIGNUM* e, BIGNUM* d) {
+  // Based off of https://wiki.openssl.org/index.php/OpenSSL_1.1.0_Changes
+  /**
+   * If the fields n and e in r are NULL, the corresponding input parameters
+   * MUST be non-NULL for n and e. d may be left NULL (in case only the public
+   * key is used).
+   */
+  if ((r->n == nullptr && n == nullptr) || (r->e == nullptr && e == nullptr)) {
+    return false;
+  }
+  if (n != nullptr) {
+    BN_free(r->n);
+    r->n = n;
+  }
+  if (e != nullptr) {
+    BN_free(r->e);
+    r->e = e;
+  }
+  if (d != nullptr) {
+    BN_free(r->d);
+    r->d = d;
+  }
+  return true;
 }
 
 #endif
-
-#if FOLLY_OPENSSL_IS_100
-////////////////////////////////////////////////////////////////////////////////
-// APIs needed only in 1.0.0 only (deprecated)
-////////////////////////////////////////////////////////////////////////////////
-uint32_t SSL_CIPHER_get_id(const SSL_CIPHER* c) {
-  return c->id;
 }
-
-int TLS1_get_client_version(const SSL* s) {
-  return (s->client_version >> 8) == TLS1_VERSION_MAJOR ? s->client_version : 0;
-}
-
-#endif
-
-#endif // !(OPENSSL_IS_BORINGSSL ||
-//          FOLLY_OPENSSL_IS_101 ||
-//          FOLLY_OPENSSL_IS_102 ||
-//          FOLLY_OPENSSL_IS_100)
-
-#endif // !FOLLY_OPENSSL_IS_110
 }
 }

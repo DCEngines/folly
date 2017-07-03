@@ -202,7 +202,18 @@ TEST(Singleton, SharedPtrUsage) {
   auto& vault = *SingletonVault::singleton<SharedPtrUsageTag>();
 
   EXPECT_EQ(vault.registeredSingletonCount(), 0);
-  SingletonSharedPtrUsage<Watchdog> watchdog_singleton;
+  std::vector<std::unique_ptr<Watchdog>> watchdog_instances;
+  SingletonSharedPtrUsage<Watchdog> watchdog_singleton(
+      [&] {
+        watchdog_instances.push_back(std::make_unique<Watchdog>());
+        return watchdog_instances.back().get();
+      },
+      [&](Watchdog* ptr) {
+        // Make sure that only second instance is destroyed. First instance is
+        // expected to be leaked.
+        EXPECT_EQ(watchdog_instances[1].get(), ptr);
+        watchdog_instances[1].reset();
+      });
   EXPECT_EQ(vault.registeredSingletonCount(), 1);
 
   SingletonSharedPtrUsage<ChildWatchdog> child_watchdog_singleton;
@@ -488,7 +499,7 @@ class TestEagerInitParallelExecutor : public folly::Executor {
     }
   }
 
-  virtual ~TestEagerInitParallelExecutor() override {
+  ~TestEagerInitParallelExecutor() override {
     for (auto eb : eventBases_) {
       eb->runInEventBaseThread([eb] { eb->terminateLoopSoon(); });
     }
@@ -497,7 +508,7 @@ class TestEagerInitParallelExecutor : public folly::Executor {
     }
   }
 
-  virtual void add(folly::Func func) override {
+  void add(folly::Func func) override {
     const auto index = (counter_ ++) % eventBases_.size();
     eventBases_[index]->add(std::move(func));
   }

@@ -25,7 +25,7 @@
 #include <vector>
 
 #include <folly/CPortability.h>
-#include <folly/detail/Stats.h>
+#include <folly/stats/detail/Bucket.h>
 
 namespace folly {
 
@@ -245,9 +245,9 @@ class Histogram {
     : buckets_(bucketSize, min, max, Bucket()) {}
 
   /* Add a data point to the histogram */
-  void addValue(ValueType value)
-      FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("signed-integer-overflow")
-      FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("unsigned-integer-overflow") {
+  void addValue(ValueType value) FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER(
+      "signed-integer-overflow",
+      "unsigned-integer-overflow") {
     Bucket& bucket = buckets_.getByValue(value);
     // NOTE: Overflow is handled elsewhere and tests check this
     // behavior (see HistogramTest.cpp TestOverflow* tests).
@@ -258,8 +258,9 @@ class Histogram {
 
   /* Add multiple same data points to the histogram */
   void addRepeatedValue(ValueType value, uint64_t nSamples)
-      FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("signed-integer-overflow")
-      FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("unsigned-integer-overflow") {
+      FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER(
+          "signed-integer-overflow",
+          "unsigned-integer-overflow") {
     Bucket& bucket = buckets_.getByValue(value);
     // NOTE: Overflow is handled elsewhere and tests check this
     // behavior (see HistogramTest.cpp TestOverflow* tests).
@@ -276,8 +277,8 @@ class Histogram {
    * requested value from the appropriate bucket's sum.
    */
   void removeValue(ValueType value) FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER(
-      "signed-integer-overflow")
-      FOLLY_DISABLE_UNDEFINED_BEHAVIOR_SANITIZER("unsigned-integer-overflow") {
+      "signed-integer-overflow",
+      "unsigned-integer-overflow") {
     Bucket& bucket = buckets_.getByValue(value);
     // NOTE: Overflow is handled elsewhere and tests check this
     // behavior (see HistogramTest.cpp TestOverflow* tests).
@@ -416,7 +417,7 @@ class Histogram {
    * Get the bucket that the specified percentile falls into
    *
    * The lowest and highest percentile data points in returned bucket will be
-   * returned in the lowPct and highPct arguments, if they are non-NULL.
+   * returned in the lowPct and highPct arguments, if they are not nullptr.
    */
   size_t getPercentileBucketIdx(
       double pct,
